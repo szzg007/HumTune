@@ -1,0 +1,11 @@
+# HumTune 构建产物与缓存（不入库）
+.build/
+build/
+*.app
+*.dmg
+*.tar.gz
+.DS_Store
+.swiftpm/
+Package.resolved
+xcuserdata/
+DerivedData/
