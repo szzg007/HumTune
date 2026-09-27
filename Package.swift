@@ -3,22 +3,23 @@ import PackageDescription
 
 let package = Package(
     name: "HumTune",
-    platforms: [.macOS(.v13)],
-    products: [
-        .library(name: "HumTuneCore", targets: ["HumTuneCore"]),
-        .executable(name: "HumTune", targets: ["HumTuneApp"]),
+    platforms: [
+        .macOS(.v14)
     ],
     targets: [
-        .target(name: "HumTuneCore"),
-        .executableTarget(name: "HumTuneCli", dependencies: ["HumTuneCore"]),
+        // 核心引擎（无 UI 依赖，可被 App 与 CLI 共用）
+        .target(
+            name: "HumTuneCore"
+        ),
+        // 命令行验证器（替代 XCTest，CLT 环境可跑）
+        .executableTarget(
+            name: "HumTuneCli",
+            dependencies: ["HumTuneCore"]
+        ),
+        // SwiftUI 应用
         .executableTarget(
             name: "HumTuneApp",
-            dependencies: ["HumTuneCore"],
-            linkerSettings: [
-                .linkedFramework("AVFoundation"),
-                .linkedFramework("SwiftUI"),
-            ]
-        ),
-        .testTarget(name: "HumTuneCoreTests", dependencies: ["HumTuneCore"]),
+            dependencies: ["HumTuneCore"]
+        )
     ]
 )

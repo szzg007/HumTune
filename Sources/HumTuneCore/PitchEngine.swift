@@ -1,69 +1,72 @@
-// 音高提取引擎：YIN 算法（基于 CMND 差分函数）
-// 目标：从一帧 PCM 采样中估计基频 f0，抗人声谐波（倍频误判）
 import Foundation
 
-public struct YINPitchEngine {
-    /// 采样率
-    public let sampleRate: Double
-    /// 基频搜索下限（Hz），哼歌通常不低于 60
-    public let minFrequency: Double
-    /// 基频搜索上限（Hz），哼歌通常不高于 1000
-    public let maxFrequency: Double
-    /// YIN 阈值，越小越严格（典型 0.1-0.2）
-    public let threshold: Double
+/// YIN 音高检测引擎（升级版）
+/// - 基础：de Cheveigné & Kawahara JASA 2002 的经典 YIN
+/// - 升级：颤音中值平滑、八度消歧、气声/无声门限
+public struct PitchEngine {
 
-    public init(sampleRate: Double = 44100,
-                minFrequency: Double = 60,
-                maxFrequency: Double = 1000,
-                threshold: Double = 0.15) {
+    public let sampleRate: Double
+    public let windowSize: Int          // 采样点
+    public let hopSize: Int             // 帧移（采样点）
+    private let minFreq: Double = 55.0  // A1 ~ 55Hz
+    private let maxFreq: Double = 880.0 // A5 ~ 880Hz（覆盖人声+乐器常用区）
+
+    public init(sampleRate: Double = 44100.0, windowSize: Int = 2048, hopSize: Int = 512) {
         self.sampleRate = sampleRate
-        self.minFrequency = minFrequency
-        self.maxFrequency = maxFrequency
-        self.threshold = threshold
+        self.windowSize = windowSize
+        self.hopSize = hopSize
     }
 
-    /// 对一帧采样估计基频与置信度
-    /// - Parameter samples: 单帧时域采样（建议帧长 2048，接近 46ms @44.1k）
-    /// - Returns: (频率Hz, 置信度0-1)，无音返回 (0, 0)
-    public func estimate(samples: [Double]) -> (frequency: Double, confidence: Double) {
-        let n = samples.count
-        guard n > 4 else { return (0, 0) }
+    /// 对整段 PCM 逐帧估计 F0
+    /// - Parameter samples: 单声道 float PCM（-1~1）
+    /// - Returns: 逐帧音高轨迹
+    public func analyze(samples: [Float]) -> [PitchFrame] {
+        var frames: [PitchFrame] = []
+        var index = 0
+        while index + windowSize <= samples.count {
+            let frame = Array(samples[index..<index + windowSize])
+            let time = Double(index) / sampleRate
+            let (freq, conf) = yin(frame: frame)
+            let energy = rms(frame)
+            frames.append(PitchFrame(frequency: freq, confidence: conf, energy: energy, time: time))
+            index += hopSize
+        }
+        return frames
+    }
 
-        let minTau = Int(sampleRate / maxFrequency)   // 高音 → 小 tau
-        let maxTau = Int(sampleRate / minFrequency)   // 低音 → 大 tau
-        guard maxTau < n / 2 else { return (0, 0) }
-        guard minTau < maxTau else { return (0, 0) }
+    /// 单帧 YIN
+    private func yin(frame: [Float]) -> (frequency: Double, confidence: Double) {
+        let n = frame.count
+        let half = n / 2
 
-        // 1) 计算 CMND 差分函数 d(tau)（YIN 核心）
-        // d(tau) = Σ (x[j] - x[j+tau])^2
-        var d = [Double](repeating: 0, count: maxTau + 1)
-        for tau in 1...maxTau {
-            var sum = 0.0
-            // 累加窗口 W = n/2 个样本（YIN 典型窗口）
-            let w = min(n / 2, n - tau)
-            for j in 0..<w {
-                let diff = samples[j] - samples[j + tau]
-                sum += diff * diff
+        // 差函数 d(tau)
+        var diff = [Double](repeating: 0, count: half)
+        for tau in 1..<half {
+            var sum: Double = 0
+            for i in 0..<half {
+                let d = Double(frame[i]) - Double(frame[i + tau])
+                sum += d * d
             }
-            d[tau] = sum
+            diff[tau] = sum
         }
 
-        // 2) 累积均值归一化 CMND
-        var cmnd = [Double](repeating: 0, count: maxTau + 1)
-        cmnd[0] = 1.0
-        var runningSum = 0.0
-        for tau in 1...maxTau {
-            runningSum += d[tau]
-            cmnd[tau] = runningSum == 0 ? 0 : (d[tau] * Double(tau) / runningSum)
+        // 累积均值归一化（CMNDF）
+        var cmndf = [Double](repeating: 0, count: half)
+        cmndf[0] = 1.0
+        var runningSum: Double = 0
+        for tau in 1..<half {
+            runningSum += diff[tau]
+            cmndf[tau] = runningSum == 0 ? 1.0 : diff[tau] * Double(tau) / runningSum
         }
 
-        // 3) 绝对阈值法找第一个 cmnd < threshold 的 tau
+        // 找第一个低于阈值的谷
+        let threshold: Double = 0.15
         var tauEstimate = -1
-        var tau = minTau
-        while tau <= maxTau {
-            if cmnd[tau] < threshold {
-                // 回调检查：确保不是局部极小值误判
-                while tau + 1 <= maxTau && cmnd[tau + 1] < cmnd[tau] {
+        var tau = 1
+        while tau < half {
+            if cmndf[tau] < threshold {
+                // 继续找局部最小
+                while tau + 1 < half && cmndf[tau + 1] < cmndf[tau] {
                     tau += 1
                 }
                 tauEstimate = tau
@@ -72,105 +75,77 @@ public struct YINPitchEngine {
             tau += 1
         }
 
-        // 若未找到，退化为全局最小 cmnd 位置（对无声段会得到无意义值，但置信度低）
-        if tauEstimate < 0 {
-            var bestTau = minTau
-            var bestVal = Double.greatestFiniteMagnitude
-            for i in minTau...maxTau {
-                if cmnd[i] < bestVal {
-                    bestVal = cmnd[i]
-                    bestTau = i
-                }
-            }
-            tauEstimate = bestTau
-        }
-
-        // 4) 抛物线插值，亚采样精度
-        let refinedTau = parabolicInterpolation(cmnd, tau: tauEstimate)
-        let freq = sampleRate / refinedTau
-
-        // 频率需落在合理区间内
-        guard freq >= minFrequency * 0.8, freq <= maxFrequency * 1.2 else {
+        guard tauEstimate > 0 else {
             return (0, 0)
         }
 
-        // 置信度：cmnd 值越小越可信，映射到 0-1
-        let c = cmnd[tauEstimate]
-        let confidence = max(0.0, min(1.0, 1.0 - c))
+        // 抛物线插值精修
+        let tauF = Double(tauEstimate)
+        let x0 = tauEstimate - 1, x1 = tauEstimate, x2 = tauEstimate + 1
+        guard x0 >= 0 && x2 < half else {
+            return (0, 0)
+        }
+        let y0 = cmndf[x0], y1 = cmndf[x1], y2 = cmndf[x2]
+        let denominator = y0 - 2 * y1 + y2
+        let refined = denominator != 0 ? tauF + (y0 - y2) / (2 * denominator) : tauF
+
+        let freq = sampleRate / refined
+
+        // 频率合理性检查（范围 + 置信度）
+        guard freq >= minFreq && freq <= maxFreq else {
+            return (0, 0)
+        }
+        let confidence = 1.0 - cmndf[tauEstimate] // 越接近 0 越可靠
 
         return (freq, confidence)
     }
 
-    /// 抛物线插值细化 tau
-    private func parabolicInterpolation(_ cmnd: [Double], tau: Int) -> Double {
-        guard tau > 0, tau + 1 < cmnd.count else { return Double(tau) }
-        let x0 = Double(tau - 1), x1 = Double(tau), x2 = Double(tau + 1)
-        let y0 = cmnd[tau - 1], y1 = cmnd[tau], y2 = cmnd[tau + 1]
-        let denom = (x0 - x1) * (x0 - x2) * (x1 - x2)
-        guard denom != 0 else { return Double(tau) }
-        let a = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denom
-        let b = (x0 * x0 * (y1 - y2) + x1 * x1 * (y2 - y0) + x2 * x2 * (y0 - y1)) / denom
-        _ = (x0 * x1 * (x0 - x1) * y2 + x1 * x2 * (x1 - x2) * y0 + x2 * x0 * (x2 - x0) * y1) / denom
-        guard abs(a) > 1e-12 else { return Double(tau) }
-        return -b / (2 * a)
+    /// RMS 能量
+    private func rms(_ frame: [Float]) -> Double {
+        var sum: Double = 0
+        for v in frame {
+            sum += Double(v) * Double(v)
+        }
+        return sqrt(sum / Double(frame.count))
     }
 }
 
-/// 帧切分器：把音频采样切成固定帧（可重叠）
-public struct FrameSplitter {
-    public let frameLength: Int
-    public let hopLength: Int
-    public let sampleRate: Double
+/// 音高轨迹后处理：中值平滑 + 八度消歧
+public enum PitchPostProcessor {
 
-    public init(frameLength: Int = 2048, hopLength: Int = 1024, sampleRate: Double = 44100) {
-        self.frameLength = frameLength
-        self.hopLength = hopLength
-        self.sampleRate = sampleRate
-    }
-
-    /// 把采样序列切成帧，返回每帧的起始采样索引
-    public func frames(in sampleCount: Int) -> [Int] {
-        guard sampleCount >= frameLength else { return [] }
-        var indices: [Int] = []
-        var start = 0
-        while start + frameLength <= sampleCount {
-            indices.append(start)
-            start += hopLength
+    /// 中值平滑（抑制颤音抖动）
+    public static func medianSmooth(_ frames: [PitchFrame], radius: Int = 3) -> [PitchFrame] {
+        return frames.enumerated().map { (i, frame) in
+            guard frame.frequency > 0 else { return frame }
+            let lo = max(0, i - radius)
+            let hi = min(frames.count - 1, i + radius)
+            var freqs: [Double] = []
+            for j in lo...hi where frames[j].frequency > 0 {
+                freqs.append(frames[j].frequency)
+            }
+            guard !freqs.isEmpty else { return frame }
+            let sorted = freqs.sorted()
+            let median = sorted[sorted.count / 2]
+            return PitchFrame(frequency: median, confidence: frame.confidence, energy: frame.energy, time: frame.time)
         }
-        return indices
     }
 
-    /// 帧起始采样索引 → 时间（秒）
-    public func time(forFrameIndex index: Int) -> Double {
-        return Double(index) / sampleRate
-    }
-}
+    /// 八度消歧：相邻帧频率跳变接近 2:1 时，归类到较近的一侧
+    /// 简单策略：以中位频率为锚，把明显落在 ±50音分 外的八度翻转回主八度
+    public static func octaveCorrect(_ frames: [PitchFrame]) -> [PitchFrame] {
+        // 估算主八度（所有有效频率的中位数）
+        let validFreqs = frames.filter { $0.frequency > 0 }.map { $0.frequency }
+        guard !validFreqs.isEmpty else { return frames }
+        let sorted = validFreqs.sorted()
+        let anchor = sorted[sorted.count / 2]
 
-/// 音高轨迹：对整段哼唱做逐帧 f0 提取
-public struct PitchTracker {
-    public let engine: YINPitchEngine
-    public let splitter: FrameSplitter
-
-    public init(engine: YINPitchEngine = YINPitchEngine(),
-                splitter: FrameSplitter = FrameSplitter()) {
-        self.engine = engine
-        self.splitter = splitter
-    }
-
-    /// 输入归一化到 [-1,1] 的采样，输出逐帧音高
-    public func track(samples: [Double]) -> [PitchFrame] {
-        var frames: [PitchFrame] = []
-        let indices = splitter.frames(in: samples.count)
-        for idx in indices {
-            let frameSamples = Array(samples[idx..<(idx + splitter.frameLength)])
-            let (freq, conf) = engine.estimate(samples: frameSamples)
-            let t = splitter.time(forFrameIndex: idx)
-            // 计算 RMS 能量（VAD 用）
-            var sum = 0.0
-            for s in frameSamples { sum += s * s }
-            let rms = sqrt(sum / Double(frameSamples.count))
-            frames.append(PitchFrame(time: t, frequency: freq, confidence: conf, energy: rms))
+        return frames.map { frame in
+            guard frame.frequency > 0 else { return frame }
+            var f = frame.frequency
+            // 向上/向下翻八度直到接近 anchor（±半音内）
+            while f > anchor * 1.414 { f /= 2 }
+            while f < anchor / 1.414 { f *= 2 }
+            return PitchFrame(frequency: f, confidence: frame.confidence, energy: frame.energy, time: frame.time)
         }
-        return frames
     }
 }

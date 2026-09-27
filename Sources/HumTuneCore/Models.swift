@@ -1,115 +1,92 @@
-// 核心数据模型：从"哼唱的音频采样"到"音符序列"
 import Foundation
-import AVFoundation
 
-/// 一个音符（量化后）
-public struct Note: Equatable, Codable {
-    /// 起始时间（秒）
-    public var time: Double
-    /// 时值（秒）
-    public var duration: Double
-    /// 原始基频（Hz），可能非整数音高
-    public var pitchHz: Double
-    /// 量化后的 MIDI 音符号（0-127），如 60 = 中央 C4
-    public var midiNote: UInt8
+/// 单个音频帧的音高分析结果
+public struct PitchFrame {
+    /// 基频（Hz），0 表示无声/无音高
+    public let frequency: Double
+    /// YIN 置信度（0~1，越高越可靠）
+    public let confidence: Double
+    /// 该帧能量 RMS
+    public let energy: Double
+    /// 时间戳（秒）
+    public let time: Double
 
-    public init(time: Double, duration: Double, pitchHz: Double, midiNote: UInt8) {
-        self.time = time
-        self.duration = duration
-        self.pitchHz = pitchHz
-        self.midiNote = midiNote
-    }
-
-    /// 音名 + 八度，如 "C4"、"D#4"
-    public var name: String {
-        let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        let octave = Int(midiNote) / 12 - 1
-        let pitchClass = Int(midiNote) % 12
-        return "\(names[pitchClass])\(octave)"
-    }
-}
-
-/// 一段旋律（哼唱识别结果）
-public struct Melody: Codable {
-    public var notes: [Note]
-    /// 估算 BPM
-    public var bpm: Double
-    /// 拍号（分子, 分母）
-    public var timeSignature: (Int, Int)
-
-    public init(notes: [Note], bpm: Double, timeSignature: (Int, Int) = (4, 4)) {
-        self.notes = notes
-        self.bpm = bpm
-        self.timeSignature = timeSignature
-    }
-
-    public enum CodingKeys: String, CodingKey {
-        case notes, bpm, timeSignature
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        notes = try c.decode([Note].self, forKey: .notes)
-        bpm = try c.decode(Double.self, forKey: .bpm)
-        let ts = try c.decode([Int].self, forKey: .timeSignature)
-        timeSignature = (ts.count >= 2 ? ts[0] : 4, ts.count >= 2 ? ts[1] : 4)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(notes, forKey: .notes)
-        try c.encode(bpm, forKey: .bpm)
-        try c.encode([timeSignature.0, timeSignature.1], forKey: .timeSignature)
-    }
-}
-
-/// 音高分析的一帧结果（原始 f0 轨迹的一帧）
-public struct PitchFrame: Equatable {
-    /// 帧起始时间（秒）
-    public var time: Double
-    /// 基频（Hz），无音/静音时为 0
-    public var frequency: Double
-    /// 置信度 0-1（YIN 的 CMND 值反推）
-    public var confidence: Double
-    /// 帧能量（RMS，0-1 归一化）——用于语音活动检测 VAD
-    public var energy: Double
-
-    public init(time: Double, frequency: Double, confidence: Double, energy: Double = 0) {
-        self.time = time
+    public init(frequency: Double, confidence: Double, energy: Double, time: Double) {
         self.frequency = frequency
         self.confidence = confidence
         self.energy = energy
+        self.time = time
     }
 }
 
-/// 音高 → MIDI note 的换算工具
-public enum PitchConverter {
-    /// 频率 → 最近 MIDI note
-    public static func midiNote(fromHz hz: Double) -> UInt8 {
-        guard hz > 0 else { return 0 }
-        let n = round(69 + 12 * log2(hz / 440.0))
-        return UInt8(max(0, min(127, n)))
+/// 一个已切分、已量化的音符（最终真值）
+public struct Note: Equatable {
+    /// MIDI 音号（60 = C4，A4 = 69）
+    public let midi: Int
+    /// 起始时间（秒）
+    public let startTime: Double
+    /// 持续时长（秒）
+    public let duration: Double
+    /// 所属声部（暂用 0）
+    public let voice: Int
+
+    public init(midi: Int, startTime: Double, duration: Double, voice: Int = 0) {
+        self.midi = midi
+        self.startTime = startTime
+        self.duration = duration
+        self.voice = voice
     }
 
-    /// MIDI note → 频率
-    public static func hz(fromMidi note: UInt8) -> Double {
-        return 440.0 * pow(2.0, (Double(note) - 69.0) / 12.0)
+    /// 音名（不含升降号：C D E F G A B）
+    public var pitchClassLetter: String {
+        let letters = ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"]
+        return letters[midi % 12]
     }
 
-    /// 频率 → 最近半音的频率（量化到十二平均律）
-    public static func snappedHz(_ hz: Double) -> Double {
-        let m = midiNote(fromHz: hz)
-        return Self.hz(fromMidi: m)
+    /// 八度（C4 为 4）
+    public var octave: Int {
+        return midi / 12 - 1
     }
+}
 
-    /// 对音符序列整体移调（±半音）
-    public static func transpose(_ notes: [Note], semitones: Int) -> [Note] {
-        notes.map { n in
-            var m = n
-            let new = Int(n.midiNote) + semitones
-            m.midiNote = UInt8(max(0, min(127, new)))
-            m.pitchHz = hz(fromMidi: m.midiNote)
-            return m
-        }
+/// 调性信息
+public struct KeySignature {
+    /// 升号为正（G大调=+1，D大调=+2...），降号为负（F大调=-1，Bb大调=-2...），C大调=0
+    public let fifths: Int
+    /// 主音 MIDI（如 C 大调 = 60）
+    public let tonicMidi: Int
+    /// 是否大调
+    public let isMajor: Bool
+
+    public init(fifths: Int, tonicMidi: Int, isMajor: Bool) {
+        self.fifths = fifths
+        self.tonicMidi = tonicMidi
+        self.isMajor = isMajor
+    }
+}
+
+/// 拍号信息
+public struct TimeSignature {
+    public let numerator: Int   // 每小节拍数
+    public let denominator: Int // 拍单位（4 = 四分音符）
+
+    public init(numerator: Int = 4, denominator: Int = 4) {
+        self.numerator = numerator
+        self.denominator = denominator
+    }
+}
+
+/// 转录结果（端到端输出）
+public struct TranscriptionResult {
+    public var notes: [Note]
+    public var key: KeySignature?
+    public var timeSignature: TimeSignature
+    public var bpm: Double
+
+    public init(notes: [Note], key: KeySignature? = nil, timeSignature: TimeSignature = TimeSignature(), bpm: Double = 120) {
+        self.notes = notes
+        self.key = key
+        self.timeSignature = timeSignature
+        self.bpm = bpm
     }
 }

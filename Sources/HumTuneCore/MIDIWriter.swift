@@ -1,84 +1,116 @@
-// 标准 MIDI 文件（SMF Format 0）写入器
-// 纯 Swift 实现，无需第三方依赖
 import Foundation
 
-public enum MIDIWriterError: Error {
-    case invalidNote
-}
+/// MIDI 文件写入器（SMF 格式 0/1）
+/// 遵循标准 MIDI 文件规范（MThd + MTrk，VLQ 变长编码）
+public struct MIDIWriter {
 
-public final class MIDIWriter {
-    /// 把音符序列写成标准 MIDI 文件（Format 0，单轨道）
-    public static func write(notes: [Note], bpm: Double, timeSignature: (Int, Int) = (4, 4)) throws -> Data {
-        var data = Data()
+    public enum Format {
+        case singleTrack  // 格式 0（所有事件在单轨）
+    }
 
-        // MIDI 头块 MThd
-        data.append("MThd".data(using: .ascii)!)
-        data.append(bigEndian(UInt32(6)))          // 头块长度固定 6
-        data.append(bigEndian(UInt16(0)))          // Format 0
-        data.append(bigEndian(UInt16(1)))          // 1 条轨道
-        let ticksPerBeat: UInt16 = 480             // 分辨率 480 PPQ
-        data.append(bigEndian(ticksPerBeat))
+    public init() {}
 
-        // 轨道块 MTrk
-        var track = Data()
+    /// 导出 MIDI 文件数据
+    /// - Parameters:
+    ///   - notes: 量化后的音符（绝对时间秒）
+    ///   - bpm: 拍速
+    ///   - timeSignature: 拍号
+    ///   - key: 调性
+    ///   - instrument: GM 音色号（0~127）
+    /// - Returns: MIDI 文件二进制数据
+    public func write(
+        notes: [Note],
+        bpm: Double,
+        timeSignature: TimeSignature = TimeSignature(),
+        key: KeySignature? = nil,
+        instrument: Int = 0
+    ) -> Data {
+        let ppqn = 480  // 每四分音符 tick 数
+        let tempoMicrosecondsPerQuarter = Int(round(60_000_000.0 / bpm))
 
-        // 1) 速度（tempo meta 事件）
-        let usPerBeat = UInt32(60_000_000 / bpm)
-        track.append(variableLength(0))            // delta-time 0
-        track.append(0xFF)                         // meta
-        track.append(0x51)                         // tempo
-        track.append(0x03)                         // 长度 3
-        track.append(UInt8((usPerBeat >> 16) & 0xFF))
-        track.append(UInt8((usPerBeat >> 8) & 0xFF))
-        track.append(UInt8(usPerBeat & 0xFF))
+        var trackEvents = Data()
 
-        // 2) 拍号 meta
-        track.append(variableLength(0))
-        track.append(0xFF); track.append(0x58); track.append(0x04)
-        track.append(UInt8(timeSignature.0))
-        track.append(UInt8(log2(Double(timeSignature.1))))  // 分母以 2 的幂存储
-        track.append(0x18)                         // MIDI 时钟每四分音符
-        track.append(0x08)                         // 每小节 32 分音符数
+        // 1. 轨道名
+        let name = "HumTune Melody"
+        trackEvents.append(contentsOf: Self.vlq(0))
+        trackEvents.append(contentsOf: [0xFF, 0x03, UInt8(name.count)])
+        trackEvents.append(contentsOf: name.utf8)
 
-        // 3) 乐器 program change（默认 Acoustic Grand Piano = 0）
-        track.append(variableLength(0))
-        track.append(0xC0); track.append(0x00)
+        // 2. 拍号 meta（0x58 04 nn dd cc bb）
+        trackEvents.append(contentsOf: Self.vlq(0))
+        trackEvents.append(contentsOf: [0xFF, 0x58, 0x04])
+        trackEvents.append(UInt8(timeSignature.numerator))
+        trackEvents.append(UInt8(log2(Double(timeSignature.denominator))))
+        trackEvents.append(0x18) // 每 MIDI 时钟 24 个 tick
+        trackEvents.append(0x08) // 每四分音符 8 个 32 分音符
 
-        // 4) 逐个音符（先按时间排序）
-        let sorted = notes.sorted { $0.time < $1.time }
-        var lastTick = 0
-        for n in sorted {
-            let startTick = Int((n.time / (60.0 / bpm)) * Double(ticksPerBeat))
-            let durTick = max(Int((n.duration / (60.0 / bpm)) * Double(ticksPerBeat)), 30)
-            let delta = max(0, startTick - lastTick)
-            lastTick = startTick
+        // 3. 速度 meta（0x51 03 tttttt）
+        trackEvents.append(contentsOf: Self.vlq(0))
+        trackEvents.append(contentsOf: [0xFF, 0x51, 0x03])
+        trackEvents.append(UInt8((tempoMicrosecondsPerQuarter >> 16) & 0xFF))
+        trackEvents.append(UInt8((tempoMicrosecondsPerQuarter >> 8) & 0xFF))
+        trackEvents.append(UInt8(tempoMicrosecondsPerQuarter & 0xFF))
 
-            // Note On（0x90）
-            track.append(variableLength(delta))
-            track.append(0x90)
-            track.append(n.midiNote)
-            track.append(0x64)                     // velocity 100
+        // 4. 调号 meta（0x59 02 sf mi）
+        trackEvents.append(contentsOf: Self.vlq(0))
+        trackEvents.append(contentsOf: [0xFF, 0x59, 0x02])
+        let fifths = Int8(key?.fifths ?? 0)
+        trackEvents.append(UInt8(bitPattern: fifths))
+        trackEvents.append(key?.isMajor ?? true ? 0x00 : 0x01)
 
-            // Note Off（0x80）
-            track.append(variableLength(durTick))
-            track.append(0x80)
-            track.append(n.midiNote)
-            track.append(0x40)
+        // 5. Program Change（音色）
+        trackEvents.append(contentsOf: Self.vlq(0))
+        trackEvents.append(contentsOf: [0xC0, UInt8(instrument)])
+
+        // 6. 音符事件（按时间排序）
+        var events: [(tick: Int, data: [UInt8])] = []
+
+        for note in notes {
+            let startTick = Int(round(note.startTime * Double(ppqn) * (Double(timeSignature.denominator) / 4.0)))
+            let endTick = Int(round((note.startTime + note.duration) * Double(ppqn) * (Double(timeSignature.denominator) / 4.0)))
+
+            let midiVal = UInt8(max(0, min(127, note.midi)))
+            let velocity: UInt8 = 100
+
+            // Note On
+            events.append((tick: startTick, data: [0x90, midiVal, velocity]))
+            // Note Off（用 Note On + velocity 0 或 Note Off）
+            events.append((tick: endTick, data: [0x80, midiVal, 0]))
         }
 
-        // 5) 轨道结束 meta
-        track.append(variableLength(0))
-        track.append(0xFF); track.append(0x2F); track.append(0x00)
+        // 按 tick 排序
+        events.sort { $0.tick < $1.tick }
 
-        data.append("MTrk".data(using: .ascii)!)
-        data.append(bigEndian(UInt32(track.count)))
-        data.append(track)
+        var lastTick = 0
+        for event in events {
+            let delta = event.tick - lastTick
+            trackEvents.append(contentsOf: Self.vlq(delta))
+            trackEvents.append(contentsOf: event.data)
+            lastTick = event.tick
+        }
+
+        // 7. 曲目结束 meta（0xFF 0x2F 0x00）
+        trackEvents.append(contentsOf: Self.vlq(0))
+        trackEvents.append(contentsOf: [0xFF, 0x2F, 0x00])
+
+        // 组装 SMF
+        var data = Data()
+        // Header Chunk
+        data.append(contentsOf: [0x4D, 0x54, 0x68, 0x64])  // MThd
+        data.append(contentsOf: Self.uint32(6))
+        data.append(contentsOf: Self.uint16(0))   // 格式 0
+        data.append(contentsOf: Self.uint16(1))   // 1 轨
+        data.append(contentsOf: Self.uint16(UInt16(ppqn)))
+        // Track Chunk
+        data.append(contentsOf: [0x4D, 0x54, 0x72, 0x6B])  // MTrk
+        data.append(contentsOf: Self.uint32(UInt32(trackEvents.count)))
+        data.append(trackEvents)
 
         return data
     }
 
-    // MARK: - 编码辅助
-    private static func variableLength(_ value: Int) -> Data {
+    /// 可变长数值编码（VLQ）
+    static func vlq(_ value: Int) -> [UInt8] {
         var v = value
         var bytes: [UInt8] = [UInt8(v & 0x7F)]
         v >>= 7
@@ -86,99 +118,14 @@ public final class MIDIWriter {
             bytes.insert(UInt8((v & 0x7F) | 0x80), at: 0)
             v >>= 7
         }
-        return Data(bytes)
+        return bytes
     }
 
-    private static func bigEndian(_ v: UInt16) -> Data {
-        var d = Data()
-        d.append(UInt8((v >> 8) & 0xFF))
-        d.append(UInt8(v & 0xFF))
-        return d
+    static func uint32(_ v: UInt32) -> [UInt8] {
+        return [UInt8((v >> 24) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)]
     }
 
-    private static func bigEndian(_ v: UInt32) -> Data {
-        var d = Data()
-        d.append(UInt8((v >> 24) & 0xFF))
-        d.append(UInt8((v >> 16) & 0xFF))
-        d.append(UInt8((v >> 8) & 0xFF))
-        d.append(UInt8(v & 0xFF))
-        return d
-    }
-}
-
-/// AI 素材包导出：结构化 JSON，喂给大模型（音乐生成类）
-public struct AIExportBundle: Codable {
-    public var meta: Meta
-    public var notes: [AINote]
-
-    public struct Meta: Codable {
-        public var bpm: Double
-        public var timeSignature: [Int]
-        public var keyGuess: String?
-        public var instrument: String
-        public var source: String
-    }
-
-    public struct AINote: Codable {
-        public var note: String      // 音名如 "C4"
-        public var midi: Int
-        public var startSeconds: Double
-        public var durationSeconds: Double
-        public var beats: Double     // 以四分音符为单位的时值
-    }
-
-    public static func build(melody: Melody, instrument: String = "piano") -> AIExportBundle {
-        let beatDur = 60.0 / melody.bpm
-        let ns = melody.notes.map { n -> AINote in
-            AINote(note: n.name,
-                   midi: Int(n.midiNote),
-                   startSeconds: n.time,
-                   durationSeconds: n.duration,
-                   beats: n.duration / beatDur)
-        }
-        return AIExportBundle(
-            meta: Meta(bpm: melody.bpm,
-                       timeSignature: [melody.timeSignature.0, melody.timeSignature.1],
-                       keyGuess: KeyEstimator.guess(notes: melody.notes),
-                       instrument: instrument,
-                       source: "HumTune hum-transcription"),
-            notes: ns
-        )
-    }
-}
-
-/// 调性（音阶）简单猜测：用音符集合匹配大调/小调
-public enum KeyEstimator {
-    public static func guess(notes: [Note]) -> String? {
-        guard !notes.isEmpty else { return nil }
-        let pitchClasses = Set(notes.map { Int($0.midiNote) % 12 })
-
-        // Krumhansl 大调/小调权重（简化版）
-        let majorProfile = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
-        let minorProfile = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
-
-        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        var bestKey: String? = nil
-        var bestScore = -Double.greatestFiniteMagnitude
-
-        for root in 0..<12 {
-            // 大调：0=大调 tonic
-            for (isMajor, profile) in [(true, majorProfile), (false, minorProfile)] {
-                var score = 0.0
-                for (pc, w) in profile.enumerated() {
-                    if pitchClasses.contains(pc) {
-                        score += w
-                    }
-                }
-                // 旋转到 root
-                // 简化：直接用未旋转的 pc 集合匹配（已含所有出现音）
-                let keyName = noteNames[root] + (isMajor ? " major" : " minor")
-                if score > bestScore {
-                    bestScore = score
-                    bestKey = keyName
-                }
-            }
-        }
-        return bestKey
+    static func uint16(_ v: UInt16) -> [UInt8] {
+        return [UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)]
     }
 }

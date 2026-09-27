@@ -1,32 +1,25 @@
 #!/bin/bash
-# HumTune DMG 打包：生成带 Applications 快捷方式的安装镜像
+# 打包 DMG 安装包（含 Applications 快捷方式）
 set -e
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
 cd "$(dirname "$0")"
 
-APP="build/HumTune.app"
-DMG="build/HumTune-0.1.0.dmg"
-STAGE="build/dmg_stage"
+APP_NAME="HumTune"
+APP_PATH="build/${APP_NAME}.app"
+DMG_NAME="哼曲HumTune-安装包.dmg"
+STAGE_DIR="/tmp/humtune_dmg_stage"
 
-echo "=== 1. 确保 app 已打包 ==="
-if [ ! -d "$APP" ]; then
-  ./build.sh
-fi
+# 清理
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+rm -f "$DMG_NAME"
 
-echo "=== 2. 准备 staging 目录 ==="
-rm -rf "$STAGE"
-mkdir -p "$STAGE"
-cp -R "$APP" "$STAGE/"
-# 创建 Applications 软链
-ln -s /Applications "$STAGE/Applications"
+# 复制 app + Applications 软链
+cp -R "$APP_PATH" "$STAGE_DIR/"
+ln -s /Applications "$STAGE_DIR/Applications"
 
-echo "=== 3. 生成 DMG ==="
-rm -f "$DMG"
-hdiutil create -volname "HumTune" -srcfolder "$STAGE" -ov -format UDZO "$DMG" 2>&1 | tail -5
+# 制作 DMG
+hdiutil create -volname "哼曲 HumTune" -srcfolder "$STAGE_DIR" -ov -format UDZO "$DMG_NAME" >/dev/null 2>&1
 
-echo ""
-echo "=== 4. 验证 DMG ==="
-hdiutil verify "$DMG" 2>&1 | tail -3
-echo ""
-echo "✅ DMG 生成: $DMG"
-du -sh "$DMG"
+echo "✅ DMG 打包完成：$DMG_NAME"
+ls -lh "$DMG_NAME"

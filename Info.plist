@@ -7,23 +7,21 @@
 	<key>CFBundleDisplayName</key>
 	<string>哼曲 HumTune</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.humtune.app</string>
+	<string>com.conaeon.humtune</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
+	<string>2.0.0</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>2.0.0</string>
+	<key>CFBundleExecutable</key>
+	<string>HumTuneApp</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-	<key>CFBundleExecutable</key>
-	<string>HumTune</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>哼曲 HumTune 需要访问麦克风来录制您的哼唱旋律并转成乐谱。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>哼曲需要访问麦克风来录制你的哼唱旋律，并将其转换为乐谱和 MIDI。</string>
-	<key>NSAudioCaptureUsageDescription</key>
-	<string>哼曲需要访问麦克风来录制你的哼唱旋律。</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 </dict>

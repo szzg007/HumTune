@@ -1,92 +1,99 @@
-# 哼曲 HumTune —— 哼歌就能出谱的 Mac 音乐创作软件
+# 哼曲 HumTune v2.0 — 使用说明
 
-> 为「有音乐细胞、没有乐理知识」的小白做的桌面软件：哼歌 → 自动转五线谱/MIDI → 换乐器演奏 → 导出素材喂 AI。
+> 重生版：结合 2026-09-26 音乐知识库深度学习成果，从"工程师 MIDI 工具"升级为"谁都哼得动的创作入口"。
 
-## 一、快速上手（无需编译，直接运行）
+---
 
-打开 `HumTune-0.1.0.dmg`，把 `HumTune` 拖进 Applications，双击即可。
+## 一、这是什么
 
-第一次会弹「麦克风授权」，点「好」，然后：
+哼一句旋律 → 自动转谱（简谱 + 五线谱）→ 导出 MIDI/MusicXML/简谱文本。
 
-1. 点 **🔴 开始哼歌**，哼出你的旋律
-2. 点 **⏹ 停止**，右侧自动显示五线谱/钢琴卷帘
-3. 换乐器、升降调、快慢变速
-4. 导出 MIDI / AI 素材包 JSON
+**核心差异化**：哼歌搜歌（SoundHound/Google）不出谱，音频转 MIDI（Basic Pitch）出 MIDI 不出易读谱——HumTune 补上"哼唱 → 简谱 + 五线谱 + 可编辑 MIDI 三合一"这个空白。
 
-## 二、核心能力
+---
 
-| 功能 | 说明 |
-|------|------|
-| 🎤 哼歌采集 | 实时录音 + 波形 + 实时音高显示 |
-| 🎵 旋律转谱 | YIN 算法提取音高（精度 0.3 音分）+ 保节奏切分 |
-| 🎼 五线谱 / 卷帘 | 自动渲染，可切换查看 |
-| 🎷 换乐器 | 系统 GM 128 音色（钢琴/吉他/小提琴/长笛…） |
-| 🎚 变换 | 升降调（±半音）、快慢变速（不变调） |
-| 💾 导出 | MIDI 文件 + AI 素材包 JSON（喂大模型生成音乐） |
+## 二、怎么用
 
-## 三、技术栈
+1. 双击 `HumTune.app` 打开
+2. 系统弹窗授权**麦克风**（必需，否则录不到声音）
+3. 点中间**大红圆键**开始哼唱，再点一下停止
+4. 录完自动出谱（默认**简谱**，123 秒懂）
+5. **点「▶ 播放」听转出来的旋律**，验证跟你设计的接近不接近
+6. 切到「音符编辑」tab，逐音**试听 + 微调音高/时值/删除**
+7. 顶部 ⚙️ 或底部「导出」菜单：**导出 MIDI / MusicXML / 音频 WAV / 简谱文本**
 
-- **纯 Swift + SwiftUI 原生**（无 Python/跨语言依赖，装机即用）
-- 音高提取：自研 YIN 算法（`PitchEngine.swift`）
-- 音符切分：onset 检测 + 音高轨迹稳定段（`NoteSegmenter.swift`）
-- MIDI 写入：自写标准 SMF 格式（`MIDIWriter.swift`）
-- 播放合成：AVAudioUnitSampler + 系统 GM 音色库（`SynthEngine.swift`）
-- 五线谱/卷帘：CoreGraphics/SwiftUI 自绘（`ScoreView.swift`）
+## 二点五、播放与保存（本次新增）
 
-## 四、二次开发
+- **播放**：转谱结果可直接试听，四种音色可选（正弦/三角/方波/锯齿）
+- **逐音微调**：音符编辑页里每个音可独立 +/− 半音、+/− 时值、删除、单音试听
+- **保存**：支持导出 **WAV 音频**（16bit/44.1kHz，直接可播可发）＋ MIDI ＋ MusicXML ＋ 简谱文本
+- **对比验证**：录完先播放，听转换后的旋律是否接近原哼唱，再进音符编辑微调偏差的音
 
-### 环境要求
-- macOS 14+
-- Xcode 27（或更高，CommandLineTools 需切换到完整 Xcode）
-- 无需任何第三方依赖
+---
 
-### 构建
+## 三、v2.0 相比旧版提升
+
+| 维度 | v1（已删除） | v2.0 |
+|------|-------------|------|
+| 打开看到 | MIDI 卷帘（要懂才懂） | 大录音键 + 波形（谁都会点） |
+| 哼完发生 | 出 MIDI，可能空白 | 自动出简谱 + 五线谱 |
+| 不懂乐理 | ❌ 拿到 MIDI 傻眼 | ✅ 简谱秒懂 + 调性自动识别 |
+| 识别准确 | YIN 单一阈值，真哼歌被判静音 | VAD 组合 + 八度消歧 + 颤音平滑 |
+| 乐谱精准 | 无量化/无调性 | BPM 量化 + 调性识别 + 音名拼写 |
+| 能带走 | 只有 MIDI | 简谱/五线谱/MIDI/MusicXML |
+
+---
+
+## 四、技术栈
+
+- **语言**：Swift 6.4 / SwiftUI（macOS 14+）
+- **音高检测**：YIN（经典算法）+ 中值平滑 + 八度消歧
+- **音符切分**：组合 VAD（置信度 OR 能量）
+- **量化**：BPM 自相关估计 + 可调量化强度
+- **调性**：Krumhansl-Schmuckler 24 调模板
+- **输出**：SMF MIDI / MusicXML / 简谱文本
+
+---
+
+## 五、二次开发
+
 ```bash
-# 确保 xcode-select 指向 Xcode
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
-# 构建可运行 App
-./build.sh          # 产出 build/HumTune.app
-
-# 打 DMG 安装包
-./make_dmg.sh       # 产出 build/HumTune-0.1.0.dmg
-
-# 跑核心引擎单元测试
-swift test
-
-# 命令行验证核心引擎（无需 GUI）
-swift run HumTuneCli           # 音高/MIDI/AI素材包验证
-swift run HumTuneCli synth     # GM 音色引擎验证
+cd ~/Desktop/HumTune
+swift build              # 编译
+swift run HumTuneCli     # 跑核心引擎验证器（12 项测试）
+./make_app.sh            # 重新打包 .app
+./make_dmg.sh            # 重新打包 DMG
 ```
 
-### 目录结构
+**工程结构**：
 ```
-HumTune/
-├── Package.swift              # SwiftPM 包定义
-├── build.sh                   # 打包 .app 脚本
-├── make_dmg.sh                # 打 DMG 脚本
-├── Info.plist                 # 麦克风权限声明
-├── Sources/
-│   ├── HumTuneCore/           # 核心引擎（纯逻辑，可单测）
-│   │   ├── PitchEngine.swift  # YIN 音高提取
-│   │   ├── NoteSegmenter.swift# 音符切分 + BPM
-│   │   ├── MIDIWriter.swift   # MIDI 写入 + AI 素材包
-│   │   ├── SynthEngine.swift  # GM 音色合成
-│   │   └── Models.swift       # 数据模型 + 音高换算
-│   ├── HumTuneApp/            # GUI 界面
-│   │   ├── HumTuneApp.swift   # 入口
-│   │   ├── ContentView.swift  # 主界面
-│   │   ├── RecordingEngine.swift # 录音引擎
-│   │   └── ScoreView.swift    # 五线谱/卷帘视图
-│   └── HumTuneCli/            # 命令行验证器
-└── Tests/                     # 单元测试
+Sources/
+├── HumTuneCore/    # 核心引擎（无 UI 依赖）
+│   ├── Models.swift          # 数据模型
+│   ├── PitchEngine.swift     # YIN 音高检测
+│   ├── NoteSegmenter.swift   # 音符切分
+│   ├── Quantizer.swift       # 节奏量化
+│   ├── KeyEstimator.swift    # 调性+音名拼写
+│   ├── MIDIWriter.swift      # MIDI 写出
+│   ├── MusicXMLExporter.swift# MusicXML 导出
+│   └── Transcriber.swift     # 流水线协调 + 简谱
+├── HumTuneCli/      # 命令行验证器
+└── HumTuneApp/      # SwiftUI 界面
 ```
 
-## 五、版本
+---
 
-- **v0.1.0**（2026-09-26）：MVP 核心闭环（录音→转谱→换乐器→导出）
-- 待办：播放光标跟随、音频导出、谱图导出、外部 sf2 导入、正式签名
+## 六、已知待办（阶段二）
 
-## 六、许可
+- 智能编曲补全（自动配和声/鼓/贝斯）——差异化杀招
+- 五线谱真实排版渲染（当前简化版，MusicXML 交给 MuseScore 精排）
+- 音频导出（wav/m4a）
+- 谱图 PNG 导出
+- sf2 音色库导入
+- 分发需 Developer ID 证书（当前 ad-hoc 签名仅本机可跑）
 
-产品代号暂定「哼曲 HumTune」。本地 ad-hoc 签名可自由运行；对外分发需 Apple Developer 签名。
+---
+
+## 七、知识库来源
+
+本工具基于 `~/Documents/knowledge/admin/music-production/` 音乐知识库开发（10 文件，含 6+3 专题深度学习成果）。

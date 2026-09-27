@@ -1,123 +1,179 @@
-// HumTune CLI 验证器：不依赖 Xcode/XCTest，用命令行跑通核心引擎
-// 用法：swift run HumTuneCli [core|synth]
 import Foundation
 import HumTuneCore
 
-// 参数分派
-let args = CommandLine.arguments
-if args.count > 1 && args[1] == "synth" {
-    exit(runSynthTest())
-}
-
-// 简易断言
-var failures = 0
-func check(_ cond: Bool, _ label: String) {
-    if cond {
-        print("✅ \(label)")
-    } else {
-        print("❌ \(label)")
-        failures += 1
+extension Array where Element == Double {
+    func median() -> Double? {
+        guard !isEmpty else { return nil }
+        let sorted = self.sorted()
+        if sorted.count % 2 == 1 {
+            return sorted[sorted.count / 2]
+        } else {
+            return (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+        }
     }
 }
 
-func sine(freq: Double, sampleRate: Double = 44100, duration: Double = 0.5) -> [Double] {
-    let n = Int(sampleRate * duration)
-    return (0..<n).map { i in sin(2 * .pi * freq * Double(i) / sampleRate) }
+// HumTune CLI 验证器
+// 替代 XCTest（CommandLineTools 环境可跑）
+
+var passCount = 0
+var failCount = 0
+
+func check(_ name: String, _ condition: Bool) {
+    if condition {
+        passCount += 1
+        print("✅ \(name)")
+    } else {
+        failCount += 1
+        print("❌ \(name)")
+    }
 }
 
-// MARK: 1. YIN 音高精度
-print("=== 1. YIN 音高精度 ===")
-let engine = YINPitchEngine(sampleRate: 44100, minFrequency: 60, maxFrequency: 1000)
-let testFreqs: [Double] = [110, 220, 261.63, 330, 440, 523.25, 660, 880]
-for f in testFreqs {
-    let samples = sine(freq: f)
-    let (est, conf) = engine.estimate(samples: samples)
-    let errorCents = abs(1200 * log2(est / f))
-    let ok = conf > 0.7 && errorCents < 30
-    print(String(format: "  f=%.2fHz → est=%.2fHz conf=%.2f err=%.1f cents %@", f, est, conf, errorCents, ok ? "OK" : "FAIL"))
-    if !ok { failures += 1 }
+print("=== HumTune v2 核心引擎验证 ===\n")
+
+// --- 测试 1：YIN 音高检测精度 ---
+print("--- 测试 1：YIN 音高检测 ---")
+let engine = PitchEngine(sampleRate: 44100.0, windowSize: 2048, hopSize: 512)
+let sr = 44100.0
+
+func sine(_ freq: Double, _ duration: Double) -> [Float] {
+    let n = Int(sr * duration)
+    var samples = [Float](repeating: 0, count: n)
+    for i in 0..<n {
+        samples[i] = Float(sin(2 * .pi * freq * Double(i) / sr))
+    }
+    return samples
 }
 
-// MARK: 2. 音高换算
-print("\n=== 2. 音高换算 ===")
-check(PitchConverter.midiNote(fromHz: 440.0) == 69, "440Hz = A4(69)")
-check(PitchConverter.midiNote(fromHz: 261.63) == 60, "261.63Hz = C4(60)")
-check(abs(PitchConverter.hz(fromMidi: 69) - 440.0) < 0.01, "69 → 440Hz")
-
-// MARK: 3. 移调
-print("\n=== 3. 移调 ===")
-let n0 = Note(time: 0, duration: 0.5, pitchHz: 440, midiNote: 69)
-let up = PitchConverter.transpose([n0], semitones: 2)
-let down = PitchConverter.transpose([n0], semitones: -2)
-check(up[0].midiNote == 71, "+2 半音 → 71(B4)")
-check(down[0].midiNote == 67, "-2 半音 → 67(G4)")
-
-// MARK: 4. 音名
-print("\n=== 4. 音名 ===")
-check(Note(time: 0, duration: 1, pitchHz: 261.63, midiNote: 60).name == "C4", "60 = C4")
-check(Note(time: 0, duration: 1, pitchHz: 466.16, midiNote: 70).name == "A#4", "70 = A#4")
-
-// MARK: 5. MIDI 写入
-print("\n=== 5. MIDI 写入 ===")
-let midiNotes = [
-    Note(time: 0, duration: 0.5, pitchHz: 261.63, midiNote: 60),
-    Note(time: 0.5, duration: 0.5, pitchHz: 293.66, midiNote: 62),
-    Note(time: 1.0, duration: 1.0, pitchHz: 329.63, midiNote: 64),
-]
-if let data = try? MIDIWriter.write(notes: midiNotes, bpm: 120) {
-    let header = String(data: data.prefix(4), encoding: .ascii)
-    check(header == "MThd", "MIDI 头 = MThd")
-    check(data.count > 40, "MIDI 文件大小 > 40B")
-    let out = "/tmp/humtune_test.mid"
-    try? data.write(to: URL(fileURLWithPath: out))
-    print("  已写出 \(out)")
+// 220Hz（A3）
+var samples = sine(220, 1.0)
+var frames = engine.analyze(samples: samples)
+var voiced = frames.filter { $0.frequency > 0 }
+if let mid = voiced.map({ $0.frequency }).sorted().median() {
+    let cents = 1200 * log2(mid / 220.0)
+    check("220Hz 检测误差 \(String(format: "%.1f", abs(cents))) 音分 (<30)", abs(cents) < 30)
 } else {
-    check(false, "MIDI 写成失败")
+    check("220Hz 检测（无有效帧）", false)
 }
 
-// MARK: 6. 端到端：正弦旋律 → 音高轨迹 → 音符
-print("\n=== 6. 端到端旋律识别 ===")
-let sr: Double = 44100
-var melody: [Double] = []
-let melodyFreqs: [(Double, Double)] = [(261.63, 0.4), (329.63, 0.4), (392.0, 0.4)]
-for (f, d) in melodyFreqs {
-    melody += sine(freq: f, sampleRate: sr, duration: d)
-}
-let splitter = FrameSplitter()
-let tracker = PitchTracker(engine: engine, splitter: splitter)
-let frames = tracker.track(samples: melody)
-let segmenter = NoteSegmenter()
-let notes = segmenter.segment(frames: frames)
-print("  识别音符数: \(notes.count)")
-for n in notes {
-    print(String(format: "    %@ (midi %d) 起 %.2fs 时值 %.2fs", n.name, n.midiNote, n.time, n.duration))
-}
-check(notes.count >= 3, "识别 ≥3 个音符")
-if notes.count >= 3 {
-    check(notes[0].midiNote == 60, "第1音 = C4")
-    check(notes[1].midiNote == 64, "第2音 = E4")
-    check(notes[2].midiNote == 67, "第3音 = G4")
-}
-
-// MARK: 7. BPM 估算 + AI 导出包
-print("\n=== 7. BPM + AI 导出包 ===")
-let bpm = BPMEstimator.estimate(notes: notes)
-print("  估算 BPM = \(Int(bpm))")
-let mel = Melody(notes: notes, bpm: bpm)
-let bundle = AIExportBundle.build(melody: mel)
-check(bundle.notes.count == notes.count, "AI 素材包音符数一致")
-if let json = try? JSONEncoder().encode(bundle) {
-    let jsonStr = String(data: json, encoding: .utf8)!
-    let out = "/tmp/humtune_ai_bundle.json"
-    try? jsonStr.write(toFile: out, atomically: true, encoding: .utf8)
-    print("  已写出 AI 素材包 \(out)")
-    print("  预览: \(jsonStr.prefix(300))")
-}
-
-print("\n==========================")
-if failures == 0 {
-    print("🎉 全部验证通过")
+// 440Hz（A4）
+samples = sine(440, 1.0)
+frames = engine.analyze(samples: samples)
+voiced = frames.filter { $0.frequency > 0 }
+if let mid = voiced.map({ $0.frequency }).sorted().median() {
+    let cents = 1200 * log2(mid / 440.0)
+    check("440Hz 检测误差 \(String(format: "%.1f", abs(cents))) 音分 (<30)", abs(cents) < 30)
 } else {
-    print("⚠️ 有 \(failures) 项失败")
+    check("440Hz 检测（无有效帧）", false)
+}
+
+// --- 测试 2：端到端正弦旋律 C4-E4-G4 ---
+print("\n--- 测试 2：端到端旋律识别 C4-E4-G4 ---")
+func melodySine(freqs: [Double], noteDur: Double) -> [Float] {
+    var out: [Float] = []
+    for f in freqs {
+        out += sine(f, noteDur)
+        // 静音间隙
+        out += [Float](repeating: 0, count: Int(sr * 0.05))
+    }
+    return out
+}
+let c4 = 261.63, e4 = 329.63, g4 = 392.0
+let melody = melodySine(freqs: [c4, e4, g4], noteDur: 0.4)
+let transcriber = Transcriber()
+let result = transcriber.transcribe(samples: melody)
+check("识别出 3 个音符（实际 \(result.notes.count)）", result.notes.count == 3)
+let expectedMidi = [60, 64, 67]  // C4 E4 G4
+let actualMidi = result.notes.map { $0.midi }
+check("音符正确 C4-E4-G4（实际 \(actualMidi)）", actualMidi == expectedMidi)
+
+// --- 测试 3：人声仿真（谐波+包络+颤音+静音） ---
+print("\n--- 测试 3：人声仿真旋律 ---")
+func humLike(freq: Double, duration: Double) -> [Float] {
+    let n = Int(sr * duration)
+    var samples = [Float](repeating: 0, count: n)
+    for i in 0..<n {
+        let t = Double(i) / sr
+        // 颤音
+        let vibrato = 1.0 + 0.005 * sin(2 * .pi * 5.0 * t)
+        // 振幅包络（起音+衰减）
+        let attack = min(1.0, t / 0.05)
+        let decay = exp(-t * 1.5)
+        let env = attack * decay
+        // 基频 + 谐波
+        var v = sin(2 * .pi * freq * vibrato * t)
+        v += 0.4 * sin(2 * .pi * freq * 2 * t)
+        v += 0.2 * sin(2 * .pi * freq * 3 * t)
+        samples[i] = Float(v * env * 0.5)
+    }
+    return samples
+}
+var hum: [Float] = []
+for f in [c4, e4, g4] {
+    hum += humLike(freq: f, duration: 0.4)
+    hum += [Float](repeating: 0, count: Int(sr * 0.08))
+}
+let humResult = transcriber.transcribe(samples: hum)
+check("人声仿真识别 3 音符（实际 \(humResult.notes.count)）", humResult.notes.count == 3)
+check("人声仿真音符正确（实际 \(humResult.notes.map { $0.midi })）", humResult.notes.map { $0.midi } == [60, 64, 67])
+
+// --- 测试 4：调性识别 ---
+print("\n--- 测试 4：调性识别 ---")
+let cMajorNotes = [Note(midi: 60, startTime: 0, duration: 0.5),
+                   Note(midi: 64, startTime: 0.5, duration: 0.5),
+                   Note(midi: 67, startTime: 1.0, duration: 0.5),
+                   Note(midi: 62, startTime: 1.5, duration: 0.5),
+                   Note(midi: 65, startTime: 2.0, duration: 0.5)]
+let keyEst = KeyEstimator()
+if let key = keyEst.estimateKey(cMajorNotes) {
+    check("C 大调识别（fifths=\(key.fifths) major=\(key.isMajor)）", key.fifths == 0 && key.isMajor)
+} else {
+    check("C 大调识别（无结果）", false)
+}
+
+// --- 测试 5：MIDI 写入 ---
+print("\n--- 测试 5：MIDI 写入 ---")
+let writer = MIDIWriter()
+let midiData = writer.write(notes: cMajorNotes, bpm: 120, key: KeySignature(fifths: 0, tonicMidi: 60, isMajor: true))
+// 检查头部 MThd
+let header = [UInt8](midiData.prefix(4))
+check("MIDI 头部 MThd（实际 \(header.map { String(format: "%02X", $0) }.joined())）", header == [0x4D, 0x54, 0x68, 0x64])
+check("MIDI 数据非空（\(midiData.count) bytes）", midiData.count > 14)
+
+// --- 测试 6：MusicXML 导出 ---
+print("\n--- 测试 6：MusicXML 导出 ---")
+let exporter = MusicXMLExporter()
+let xml = exporter.export(notes: cMajorNotes, key: KeySignature(fifths: 0, tonicMidi: 60, isMajor: true))
+check("MusicXML 包含 score-partwise", xml.contains("score-partwise"))
+check("MusicXML 包含 note 标签", xml.contains("<note>"))
+
+// --- 测试 7：简谱格式化 ---
+print("\n--- 测试 7：简谱格式化 ---")
+let jianpu = JianpuFormatter()
+let jp = jianpu.format(cMajorNotes, key: KeySignature(fifths: 0, tonicMidi: 60, isMajor: true))
+check("简谱输出（\(jp)）", !jp.isEmpty)
+
+// --- 测试 8：合成引擎 + WAV 导出 ---
+print("\n--- 测试 8：合成引擎 + WAV 导出 ---")
+let synth = SynthEngine()
+let synthSamples = synth.render(notes: cMajorNotes, waveform: .sine)
+check("合成 PCM 非空（\(synthSamples.count) 采样）", synthSamples.count > 1000)
+let wavWriter = WAVWriter()
+let wavData = wavWriter.write(samples: synthSamples)
+let riffStr = String(data: wavData.prefix(4), encoding: .ascii) ?? "?"
+let waveStr = String(data: wavData.subdata(in: 8..<12), encoding: .ascii) ?? "?"
+check("WAV 头 RIFF/WAVE（实际 \(riffStr)/\(waveStr)）", riffStr == "RIFF" && waveStr == "WAVE")
+check("WAV 数据大小合理（\(wavData.count) bytes > 44）", wavData.count > 44)
+// 写入实际文件供人工试听
+let wavPath = "/tmp/humtune_test.wav"
+try? wavData.write(to: URL(fileURLWithPath: wavPath))
+print("  试听文件：\(wavPath)")
+
+// --- 汇总 ---
+print("\n=== 验证结果：\(passCount) 通过 / \(failCount) 失败 ===")
+if failCount > 0 {
     exit(1)
+} else {
+    print("🎉 全部测试通过！")
+    exit(0)
 }

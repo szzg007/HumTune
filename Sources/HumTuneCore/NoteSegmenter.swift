@@ -1,183 +1,101 @@
-// 音符切分：把逐帧音高轨迹切成离散音符（起音检测 + 稳定段取均值）
-// 目标：保节奏——还原每个音的长短与停顿
 import Foundation
 
-/// 起音检测器：基于频谱通量（spectral flux）的简化版
-/// 对哼歌场景，用"音高轨迹突变 + 能量上升"判断新音开始
-public struct OnsetDetector {
-    /// 起音判定阈值（相邻帧音高跳变，单位：半音）
-    public let pitchJumpSemitones: Double
-    /// 静音 → 有音 的能量阈值
-    public let silenceConfidence: Double
-
-    public init(pitchJumpSemitones: Double = 1.5, silenceConfidence: Double = 0.25) {
-        self.pitchJumpSemitones = pitchJumpSemitones
-        self.silenceConfidence = silenceConfidence
-    }
-}
-
-/// 音符切分器：输入 PitchFrame 序列，输出 Note 序列
+/// 音符切分器（升级版）
+/// 关键修复：用"组合 VAD"（置信度 OR 能量）判有无音，
+/// 而不是单一置信度阈值——避免真哼歌被判静音导致 0 音符。
 public struct NoteSegmenter {
-    /// 最小音符时长（秒），低于此的短音当作噪声
-    public let minNoteDuration: Double
-    /// 音符间视为停顿的最小间隔（秒）
-    public let minGapDuration: Double
 
-    public init(minNoteDuration: Double = 0.08, minGapDuration: Double = 0.05) {
-        self.minNoteDuration = minNoteDuration
-        self.minGapDuration = minGapDuration
-    }
+    /// 置信度阈值（低于此但能量足够仍算有音）
+    public var confidenceThreshold: Double = 0.12
+    /// 能量阈值倍数（相对底噪）
+    public var energyMultiplier: Double = 2.5
+    /// 底噪能量（无音帧的平均能量，自动估算）
+    public var noiseFloor: Double = 0.002
+    /// 最短音符时长（秒），干掉滑音/倚音假音符
+    public var minNoteDuration: Double = 0.08
+    /// 频率→MIDI 号换算
+    private let a4Freq: Double = 440.0
 
-    /// 切分音高轨迹为音符
-    /// 算法：组合 VAD（置信度为主 + 能量为辅）判断有无音；
-    ///       相邻帧 f0 跳变超阈值 → 新音起音（核心切分机制）
-    public func segment(frames: [PitchFrame]) -> [Note] {
+    public init() {}
+
+    /// 从音高轨迹切分出音符（未量化，绝对时间）
+    public func segment(_ frames: [PitchFrame]) -> [(midi: Int, start: Double, end: Double)] {
         guard !frames.isEmpty else { return [] }
 
-        // 自适应静音阈值：取能量 10% 分位作为底噪，阈值为其 2.5 倍
+        // 自动估算底噪：取能量最低 20% 帧的平均
+        var floor = noiseFloor
         let energies = frames.map { $0.energy }.sorted()
-        let noiseFloor = energies[energies.count / 10]
-        let energyThreshold = noiseFloor * 2.5
-        // 置信度阈值：哼歌 YIN 置信度普遍偏低，放宽到 0.12
-        let confThreshold = 0.12
+        if energies.count >= 5 {
+            let lowCount = max(1, energies.count / 5)
+            floor = energies.prefix(lowCount).reduce(0, +) / Double(lowCount)
+        }
 
-        var notes: [Note] = []
-        var segStartTime: Double? = nil
-        var segFreqs: [Double] = []
-        var lastFreq: Double = 0
-        var lastTime = frames[0].time
+        var notes: [(midi: Int, start: Double, end: Double)] = []
+        var currentMidi: Int? = nil
+        var currentStart: Double = 0
+        var lastTime: Double = frames.first!.time
+
+        func isVoiced(_ f: PitchFrame) -> Bool {
+            return f.frequency > 0 &&
+                   (f.confidence > confidenceThreshold || f.energy > energyMultiplier * floor)
+        }
 
         for frame in frames {
-            // 组合判定：f0>0 且（置信度够 或 能量够）
-            // 连续正弦波：conf≈1 → 有音；真哼歌：conf低但 energy 高 → 有音；纯静音：两者都低 → 无音
-            let voiced = frame.frequency > 0
-                && (frame.confidence > confThreshold || frame.energy > energyThreshold)
-
-            if voiced {
-                if segStartTime == nil {
-                    segStartTime = frame.time
-                    segFreqs = [frame.frequency]
-                } else {
-                    let jump = abs(semitoneDiff(frame.frequency, lastFreq))
-                    if jump > 1.5 && lastFreq > 0 {
-                        let note = finishNote(start: segStartTime!,
-                                              end: lastTime,
-                                              freqs: segFreqs)
-                        if note != nil { notes.append(note!) }
-                        segStartTime = frame.time
-                        segFreqs = [frame.frequency]
-                    } else {
-                        segFreqs.append(frame.frequency)
+            if isVoiced(frame) {
+                let midi = freqToMidi(frame.frequency)
+                if currentMidi == nil {
+                    // 新音符开始
+                    currentMidi = midi
+                    currentStart = frame.time
+                } else if midi != currentMidi {
+                    // 音高变化 → 结束上一个，开始新的
+                    if let m = currentMidi {
+                        notes.append((midi: m, start: currentStart, end: frame.time))
                     }
+                    currentMidi = midi
+                    currentStart = frame.time
                 }
-                lastFreq = frame.frequency
             } else {
-                // 无音帧：若有正在累积的音，结束它
-                if segStartTime != nil {
-                    let gap = frame.time - lastTime
-                    if gap >= minGapDuration && lastFreq > 0 {
-                        let note = finishNote(start: segStartTime!,
-                                              end: lastTime,
-                                              freqs: segFreqs)
-                        if note != nil { notes.append(note!) }
-                        segStartTime = nil
-                        segFreqs = []
-                        lastFreq = 0
-                    }
+                // 无声/静音帧 → 结束当前音符
+                if let m = currentMidi {
+                    notes.append((midi: m, start: currentStart, end: frame.time))
+                    currentMidi = nil
                 }
             }
             lastTime = frame.time
         }
 
-        // 收尾：最后一个未结束的音
-        if let start = segStartTime, lastFreq > 0 {
-            let note = finishNote(start: start, end: lastTime, freqs: segFreqs)
-            if note != nil { notes.append(note!) }
+        // 收尾：最后一个音符
+        if let m = currentMidi {
+            notes.append((midi: m, start: currentStart, end: lastTime))
         }
 
-        return notes
+        // 过滤：最短时长 + 合并同音相邻
+        return filterAndMerge(notes)
     }
 
-    /// 用一段频率序列生成单个音符：取中位数作音高
-    private func finishNote(start: Double, end: Double, freqs: [Double]) -> Note? {
-        let duration = end - start
-        guard duration >= minNoteDuration, !freqs.isEmpty else { return nil }
+    private func freqToMidi(_ freq: Double) -> Int {
+        // MIDI = 69 + 12*log2(f/440)
+        let midi = 69 + 12 * (log(freq / a4Freq) / log(2.0))
+        return Int(round(midi))
+    }
 
-        // 中位数抗离群（比均值稳）
-        let sorted = freqs.sorted()
-        let median = sorted[sorted.count / 2]
-        // 去掉明显偏离的音高帧（颤音），求稳定性
-        var stable: [Double] = []
-        for f in freqs {
-            if abs(semitoneDiff(f, median)) < 0.6 {
-                stable.append(f)
+    /// 最短音符过滤 + 同音相邻合并（隔静音 < 30ms 合并）
+    private func filterAndMerge(_ notes: [(midi: Int, start: Double, end: Double)]) -> [(midi: Int, start: Double, end: Double)] {
+        var result: [(midi: Int, start: Double, end: Double)] = []
+        let gapMergeThreshold = 0.03
+
+        for note in notes {
+            let duration = note.end - note.start
+            guard duration >= minNoteDuration else { continue }
+
+            if let last = result.last, last.midi == note.midi, note.start - last.end < gapMergeThreshold {
+                // 合并
+                let merged = (midi: last.midi, start: last.start, end: note.end)
+                result[result.count - 1] = merged
+            } else {
+                result.append(note)
             }
-        }
-        let pitch = stable.isEmpty ? median : (stable.reduce(0, +) / Double(stable.count))
-
-        let midi = PitchConverter.midiNote(fromHz: pitch)
-        return Note(time: start, duration: duration, pitchHz: pitch, midiNote: midi)
-    }
-
-    /// 两频率的半音差
-    private func semitoneDiff(_ f1: Double, _ f2: Double) -> Double {
-        guard f1 > 0, f2 > 0 else { return 0 }
-        return 12 * log2(f1 / f2)
-    }
-}
-
-/// BPM 估算：用音符起始间隔的分布估算
-public enum BPMEstimator {
-    /// 估算 BPM（用相邻音符 onset 间隔的中位数 → 假设为四分音符/八分音符）
-    public static func estimate(notes: [Note]) -> Double {
-        guard notes.count >= 2 else { return 120 }
-        var intervals: [Double] = []
-        for i in 1..<notes.count {
-            let dt = notes[i].time - notes[i - 1].time
-            if dt > 0.05 && dt < 2.0 {
-                intervals.append(dt)
-            }
-        }
-        guard let median = median(intervals), median > 0 else { return 120 }
-
-        // 假设中位间隔对应八分音符或四分音符，取最接近 60-180 BPM 的
-        var candidates: [Double] = []
-        for subdiv in [1.0, 2.0, 0.5, 3.0] {
-            let bpm = 60.0 / (median * subdiv)
-            candidates.append(bpm)
-        }
-        return candidates.min(by: { abs($0 - 120) < abs($1 - 120) }) ?? 120
-    }
-
-    private static func median(_ arr: [Double]) -> Double? {
-        guard !arr.isEmpty else { return nil }
-        let s = arr.sorted()
-        let mid = s.count / 2
-        if s.count % 2 == 0 {
-            return (s[mid - 1] + s[mid]) / 2
-        } else {
-            return s[mid]
-        }
-    }
-}
-
-/// 音符量化：把秒为单位的时值/位置量化到节拍网格（16 分音符精度）
-public struct Quantizer {
-    /// 按时值比例量化到最小网格长度（保持相对节奏比例）
-    public static func quantize(notes: [Note], bpm: Double, subdivision: Int = 16) -> [Note] {
-        guard !notes.isEmpty else { return [] }
-        let beatDuration = 60.0 / bpm
-        let grid = beatDuration / Double(subdivision)
-
-        var result: [Note] = []
-        for n in notes {
-            let start = (n.time / grid).rounded() * grid
-            var dur = (n.duration / grid).rounded() * grid
-            if dur < grid { dur = grid }
-            var m = n
-            m.time = start
-            m.duration = dur
-            result.append(m)
         }
         return result
     }

@@ -1,216 +1,322 @@
-// 主界面：录音 → 转谱 → 五线谱/卷帘 → 换乐器 → 导出
 import SwiftUI
 import AppKit
 import HumTuneCore
 
+/// 主内容视图
 struct ContentView: View {
-    @StateObject private var recorder = RecordingEngine()
-    @State private var melody: Melody? = nil
-    @State private var selectedInstrument: UInt8 = 0
-    @State private var synth = SynthEngine()
-    @State private var viewMode = true   // true=五线谱, false=钢琴卷帘
-    @State private var statusText = "点麦克风开始哼歌"
+    @StateObject private var engine = RecordingEngine()
+    @StateObject private var player = AudioPlayer()
+    @State private var notes: [Note] = []
+    @State private var key: KeySignature? = nil
+    @State private var bpm: Double = 120
+    @State private var hasResult = false
+    @State private var viewMode: ViewMode = .jianpu
+    @State private var waveform: SynthEngine.Waveform = .sine
+    @State private var playingIndex: Int = 0
+
+    enum ViewMode: String, CaseIterable, Identifiable {
+        case jianpu = "简谱"
+        case score = "五线谱"
+        case notes = "音符编辑"
+        var id: String { rawValue }
+    }
 
     var body: some View {
-        HSplitView {
-            // 左侧：录音 + 变换控制
-            VStack(alignment: .leading, spacing: 16) {
-                Text("🎤 哼歌创作")
-                    .font(.largeTitle.bold())
-
-                Text(statusText)
-                    .foregroundColor(.secondary)
-
-                // 波形/音量条
-                ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.15))
-                        .frame(height: 120)
-                    VStack {
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(recorder.isRecording ? Color.red.opacity(0.6) : Color.blue.opacity(0.4))
-                            .frame(height: CGFloat(recorder.level) * 110)
-                    }
-                }
-                .frame(height: 120)
-
-                // 实时音高显示
-                HStack {
-                    Text("当前音:")
-                    Text(recorder.currentNote)
-                        .font(.title.bold())
-                        .foregroundColor(.purple)
-                    Spacer()
-                    if recorder.currentFreq > 0 {
-                        Text(String(format: "%.1f Hz", recorder.currentFreq))
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // 录音按钮
-                HStack(spacing: 12) {
-                    Button(recorder.isRecording ? "⏹ 停止" : "🔴 开始哼歌") {
-                        if recorder.isRecording {
-                            recorder.stop()
-                            melody = recorder.transcribe()
-                            statusText = "识别完成，共 \(melody?.notes.count ?? 0) 个音符"
-                            playMelody()
-                        } else {
-                            if recorder.requestPermission() {
-                                recorder.start()
-                                statusText = "录音中…哼出你的旋律"
-                                melody = nil
-                            } else {
-                                statusText = "⚠️ 无麦克风权限，请在系统设置授权"
-                            }
+        VStack(spacing: 16) {
+            // 标题栏
+            HStack {
+                Text("哼曲 HumTune")
+                    .font(.title2.bold())
+                Spacer()
+                Menu {
+                    Picker("音色", selection: $waveform) {
+                        ForEach(SynthEngine.Waveform.allCases) { w in
+                            Text(w.rawValue).tag(w)
                         }
+                    }
+                    Divider()
+                    Button("导出 MIDI") { exportMIDI() }
+                    Button("导出 MusicXML") { exportMusicXML() }
+                    Button("导出简谱文本") { exportJianpu() }
+                    Button("导出音频 WAV") { exportWAV() }
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.title3)
+                }
+            }
+            .padding(.horizontal)
+
+            // 波形区（主视觉）
+            WaveformView(
+                samples: engine.samples,
+                liveAmplitude: engine.liveAmplitude,
+                isRecording: engine.state == .recording
+            )
+            .frame(height: 140)
+            .background(Color.secondary.opacity(0.08))
+            .cornerRadius(12)
+            .padding(.horizontal)
+
+            // 录音计时
+            if engine.state == .recording {
+                Text(String(format: "%.1f 秒", engine.elapsedTime))
+                    .font(.headline.monospacedDigit())
+                    .foregroundColor(.red)
+            }
+
+            // 大录音键
+            RecordButton(state: engine.state) {
+                toggleRecording()
+            }
+
+            // 结果区
+            if hasResult && engine.state == .stopped {
+                Divider()
+
+                // tab 切换
+                Picker("视图", selection: $viewMode) {
+                    Text("简谱").tag(ViewMode.jianpu)
+                    Text("五线谱").tag(ViewMode.score)
+                    Text("音符编辑").tag(ViewMode.notes)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 300)
+
+                // 调性信息
+                if let k = key {
+                    Text("调性：\(keyName(k)) · BPM：\(Int(bpm)) · \(notes.count) 个音符")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                // 内容区
+                Group {
+                    switch viewMode {
+                    case .jianpu:
+                        JianpuView(notes: notes, key: key)
+                            .frame(height: 100)
+                    case .score:
+                        ScoreView(notes: notes, key: key)
+                            .frame(height: 100)
+                    case .notes:
+                        NoteEditList(
+                            notes: $notes,
+                            playingIndex: playingIndex,
+                            onPreview: { midi in player.previewNote(midi: midi, waveform: waveform) }
+                        )
+                        .frame(height: 180)
+                    }
+                }
+                .padding(.horizontal)
+
+                // 播放/导出操作栏
+                HStack(spacing: 16) {
+                    Button(player.isPlaying ? "停止" : "▶ 播放") {
+                        togglePlay()
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(recorder.isRecording ? .red : .blue)
-                    .font(.title3)
 
-                    if melody != nil {
-                        Button("🔊 重新播放") { playMelody() }
-                            .buttonStyle(.bordered)
+                    Menu("导出") {
+                        Button("MIDI") { exportMIDI() }
+                        Button("MusicXML") { exportMusicXML() }
+                        Button("音频 WAV") { exportWAV() }
+                        Button("简谱文本") { exportJianpu() }
                     }
-                }
+                    .buttonStyle(.bordered)
 
-                // 乐器选择
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("🎷 选择乐器")
-                        .font(.headline)
-                    Picker("", selection: $selectedInstrument) {
-                        ForEach(GMInstruments.favorites, id: \.program) { fav in
-                            Text(fav.name).tag(fav.program)
+                    Picker("", selection: $waveform) {
+                        ForEach(SynthEngine.Waveform.allCases) { w in
+                            Text(w.rawValue).tag(w)
                         }
                     }
-                    .pickerStyle(.menu)
-                    .onChange(of: selectedInstrument) { newVal in
-                        synth.setProgram(newVal)
-                        playMelody()
-                    }
-                }
-
-                // 变换控制
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("🎚 变换")
-                        .font(.headline)
-                    HStack {
-                        Button("降半音 -") { transpose(-1) }
-                        Button("升半音 +") { transpose(1) }
-                        Button("减速 ⏪") { tempoScale(0.9) }
-                        Button("加速 ⏩") { tempoScale(1.1) }
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Spacer()
-
-                // 导出按钮
-                if melody != nil {
-                    HStack {
-                        Button("💾 导出 MIDI") { exportMIDI() }
-                        Button("🤖 导出 AI 素材包") { exportAIBundle() }
-                    }
-                    .buttonStyle(.bordered)
+                    .frame(width: 140)
                 }
             }
-            .padding()
-            .frame(minWidth: 380, idealWidth: 400, maxWidth: 460)
 
-            Divider()
-
-            // 右侧：五线谱 + 卷帘
-            VStack(alignment: .leading) {
-                if let mel = melody {
-                    Picker("视图", selection: $viewMode) {
-                        Text("五线谱").tag(true)
-                        Text("钢琴卷帘").tag(false)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 220)
-
-                    if viewMode {
-                        ScoreView(melody: mel)
-                    } else {
-                        PianoRollView(melody: mel)
-                    }
-                } else {
-                    VStack {
-                        Spacer()
-                        Text("🎼 哼完会自动显示五线谱")
-                            .font(.title2)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .padding()
-            .frame(minWidth: 500)
+            Spacer()
         }
-        .onAppear {
+        .padding(.vertical)
+        .frame(minWidth: 520, minHeight: 640)
+        .onReceive(player.$isPlaying) { playing in
+            if !playing { playingIndex = 0 }
+        }
+    }
+
+    // MARK: - 录音
+
+    private func toggleRecording() {
+        switch engine.state {
+        case .idle, .stopped:
+            hasResult = false
+            player.stop()
             do {
-                try synth.loadSystemGM()
-                synth.setProgram(0)
+                try engine.start()
             } catch {
-                statusText = "⚠️ 音色库加载失败: \(error.localizedDescription)"
+                print("录音失败：\(error)")
+            }
+        case .recording:
+            engine.stop()
+            engine.transcribe { r in
+                self.notes = r.notes
+                self.key = r.key
+                self.bpm = r.bpm
+                self.hasResult = true
             }
         }
     }
 
-    // MARK: - 动作
-    private func playMelody() {
-        guard let mel = melody, !mel.notes.isEmpty else { return }
-        synth.playMelody(mel.notes)
-    }
+    // MARK: - 播放
 
-    private func transpose(_ semitones: Int) {
-        guard var mel = melody else { return }
-        mel.notes = PitchConverter.transpose(mel.notes, semitones: semitones)
-        melody = mel
-        playMelody()
-    }
-
-    private func tempoScale(_ factor: Double) {
-        guard var mel = melody else { return }
-        mel.notes = mel.notes.map { n in
-            var m = n
-            m.time /= factor
-            m.duration /= factor
-            return m
+    private func togglePlay() {
+        if player.isPlaying {
+            player.stop()
+            playingIndex = 0
+        } else {
+            player.play(notes: notes, waveform: waveform)
         }
-        mel.bpm *= factor
-        melody = mel
-        playMelody()
     }
+
+    // MARK: - 导出
 
     private func exportMIDI() {
-        guard let mel = melody else { return }
-        do {
-            let data = try MIDIWriter.write(notes: mel.notes, bpm: mel.bpm)
-            saveData(data, ext: "mid")
-        } catch {
-            statusText = "导出失败: \(error.localizedDescription)"
-        }
+        let writer = MIDIWriter()
+        let data = writer.write(notes: notes, bpm: bpm, key: key)
+        saveData(data, ext: "mid", name: "HumTune旋律")
     }
 
-    private func exportAIBundle() {
-        guard let mel = melody else { return }
-        let bundle = AIExportBundle.build(melody: mel, instrument: GMInstruments.names[Int(selectedInstrument)])
-        if let json = try? JSONEncoder().encode(bundle) {
-            saveData(json, ext: "json")
-        }
+    private func exportMusicXML() {
+        let exporter = MusicXMLExporter()
+        let xml = exporter.export(notes: notes, key: key, bpm: bpm)
+        saveData(Data(xml.utf8), ext: "musicxml", name: "HumTune旋律")
     }
 
-    private func saveData(_ data: Data, ext: String) {
+    private func exportJianpu() {
+        let formatter = JianpuFormatter()
+        let text = formatter.format(notes, key: key)
+        saveData(Data(text.utf8), ext: "txt", name: "HumTune简谱")
+    }
+
+    private func exportWAV() {
+        let synth = SynthEngine()
+        let samples = synth.render(notes: notes, waveform: waveform)
+        let writer = WAVWriter()
+        let data = writer.write(samples: samples)
+        saveData(data, ext: "wav", name: "HumTune旋律")
+    }
+
+    private func saveData(_ data: Data, ext: String, name: String) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.init(filenameExtension: ext) ?? .data]
-        panel.nameFieldStringValue = "HumTune_\(Int(Date().timeIntervalSince1970)).\(ext)"
-        if panel.runModal() == .OK, let url = panel.url {
-            try? data.write(to: url)
-            statusText = "✅ 已导出 \(url.lastPathComponent)"
+        panel.nameFieldStringValue = "\(name).\(ext)"
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                try? data.write(to: url)
+            }
         }
+    }
+
+    private func keyName(_ key: KeySignature) -> String {
+        let tonicNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        let tonic = tonicNames[key.tonicMidi % 12]
+        return "\(tonic) \(key.isMajor ? "大调" : "小调")"
+    }
+}
+
+/// 音符编辑列表：可逐音试听 + 微调音高/时值
+struct NoteEditList: View {
+    @Binding var notes: [Note]
+    let playingIndex: Int
+    let onPreview: (Int) -> Void
+
+    private let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 4) {
+                ForEach(Array(notes.enumerated()), id: \.offset) { index, note in
+                    HStack(spacing: 8) {
+                        Text("#\(index + 1)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                            .frame(width: 32, alignment: .trailing)
+
+                        Button(action: { onPreview(note.midi) }) {
+                            Image(systemName: "play.circle")
+                        }
+                        .buttonStyle(.borderless)
+
+                        Text("\(noteNames[note.midi % 12])\(note.octave)")
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 56, alignment: .leading)
+
+                        Button(action: { changePitch(index, -1) }) {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(note.midi <= 21)
+
+                        Button(action: { changePitch(index, +1) }) {
+                            Image(systemName: "plus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(note.midi >= 108)
+
+                        Text(String(format: "%.2fs", note.duration))
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                            .frame(width: 52)
+
+                        Button(action: { changeDuration(index, -0.05) }) {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(note.duration <= 0.05)
+
+                        Button(action: { changeDuration(index, +0.05) }) {
+                            Image(systemName: "plus.circle")
+                        }
+                        .buttonStyle(.borderless)
+
+                        Button(action: { notes.remove(at: index) }) {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red.opacity(0.7))
+                        }
+                        .buttonStyle(.borderless)
+
+                        Spacer()
+
+                        if playingIndex == index {
+                            Circle().fill(Color.accentColor).frame(width: 8, height: 8)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 8)
+                    .cornerRadius(6)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func changePitch(_ index: Int, _ delta: Int) {
+        guard index < notes.count else { return }
+        let n = notes[index]
+        notes[index] = Note(midi: n.midi + delta, startTime: n.startTime, duration: n.duration)
+    }
+
+    private func changeDuration(_ index: Int, _ delta: Double) {
+        guard index < notes.count else { return }
+        let n = notes[index]
+        let newDur = max(0.05, n.duration + delta)
+        notes[index] = Note(midi: n.midi, startTime: n.startTime, duration: newDur)
+    }
+}
+
+@main
+struct HumTuneApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+        .windowStyle(.titleBar)
     }
 }
