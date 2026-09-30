@@ -22,6 +22,32 @@ struct ContentView: View {
         var id: String { rawValue }
     }
 
+    // MARK: - 演示旋律（打开即玩，零门槛）
+    private func loadDemo() {
+        player.stop()
+        // 《小星星》Twinkle Twinkle Little Star，C 大调，4/4 拍
+        let melody: [(Int, Double)] = [
+            (60, 0.5), (60, 0.5), (67, 0.5), (67, 0.5), (69, 0.5), (69, 0.5), (67, 1.0),
+            (65, 0.5), (65, 0.5), (64, 0.5), (64, 0.5), (62, 0.5), (62, 0.5), (60, 1.0),
+            (67, 0.5), (67, 0.5), (65, 0.5), (65, 0.5), (64, 0.5), (64, 0.5), (62, 1.0),
+            (67, 0.5), (67, 0.5), (65, 0.5), (65, 0.5), (64, 0.5), (64, 0.5), (62, 1.0),
+            (60, 0.5), (60, 0.5), (67, 0.5), (67, 0.5), (69, 0.5), (69, 0.5), (67, 1.0),
+            (65, 0.5), (65, 0.5), (64, 0.5), (64, 0.5), (62, 0.5), (62, 0.5), (60, 1.0)
+        ]
+        var result: [Note] = []
+        var t: Double = 0
+        for (midi, dur) in melody {
+            result.append(Note(midi: midi, startTime: t, duration: dur))
+            t += dur
+        }
+        notes = result
+        key = KeySignature(fifths: 0, tonicMidi: 60, isMajor: true)
+        bpm = 120
+        hasResult = true
+        viewMode = .jianpu
+        engine.state = .stopped
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             // 标题栏
@@ -29,6 +55,11 @@ struct ContentView: View {
                 Text("哼曲 HumTune")
                     .font(.title2.bold())
                 Spacer()
+                Button("🎵 载入演示旋律") {
+                    loadDemo()
+                }
+                .buttonStyle(.bordered)
+                .help("一键载入《小星星》示例，打开即玩")
                 Menu {
                     Picker("音色", selection: $waveform) {
                         ForEach(SynthEngine.Waveform.allCases) { w in
@@ -150,6 +181,12 @@ struct ContentView: View {
         .frame(minWidth: 520, minHeight: 640)
         .onReceive(player.$isPlaying) { playing in
             if !playing { playingIndex = 0 }
+        }
+        .onAppear {
+            // 首次启动自动载入演示旋律，打开即玩（零门槛）
+            if notes.isEmpty {
+                loadDemo()
+            }
         }
         .sheet(isPresented: $showStudio) {
             StudioView(notes: $notes, bpm: bpm, key: key)

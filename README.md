@@ -1,99 +1,140 @@
-# 哼曲 HumTune v2.0 — 使用说明
+# 🎼 HumTune 哼曲 — 让所有人都参与到音乐创作中来，没有障碍
 
-> 重生版：结合 2026-09-26 音乐知识库深度学习成果，从"工程师 MIDI 工具"升级为"谁都哼得动的创作入口"。
+> **Music Creation for Everyone. Zero Barriers.**
+> **誰でも音楽制作に参加できる。障壁ゼロ。**
+> **누구나 음악 창작에 참여할 수 있다. 장벽 제로.**
+> **讓所有人都參與到音樂創作中來，沒有障礙。**
 
----
-
-## 一、这是什么
-
-哼一句旋律 → 自动转谱（简谱 + 五线谱）→ 导出 MIDI/MusicXML/简谱文本。
-
-**核心差异化**：哼歌搜歌（SoundHound/Google）不出谱，音频转 MIDI（Basic Pitch）出 MIDI 不出易读谱——HumTune 补上"哼唱 → 简谱 + 五线谱 + 可编辑 MIDI 三合一"这个空白。
+哼一句旋律，就能把它变成可以播放、可以换乐器、可以一格一格编辑、可以导出 MIDI 的音乐作品。**不需要任何乐理知识，不需要任何乐器，只需要你的声音。**
 
 ---
 
-## 二、怎么用
+## ✨ 为什么是 HumTune？
 
-1. 双击 `HumTune.app` 打开
-2. 系统弹窗授权**麦克风**（必需，否则录不到声音）
-3. 点中间**大红圆键**开始哼唱，再点一下停止
-4. 录完自动出谱（默认**简谱**，123 秒懂）
-5. **点「▶ 播放」听转出来的旋律**，验证跟你设计的接近不接近
-6. 切到「音符编辑」tab，逐音**试听 + 微调音高/时值/删除**
-7. 顶部 ⚙️ 或底部「导出」菜单：**导出 MIDI / MusicXML / 音频 WAV / 简谱文本**
+| 别人 | HumTune |
+|------|---------|
+| 哼歌搜歌（SoundHound）→ 只告诉你这是哪首歌，出不了谱 | 哼歌 → **直接出简谱 + 五线谱 + MIDI** |
+| 音频转 MIDI（Basic Pitch）→ 出了 MIDI 却看不懂 | 出谱**还带易读的简谱**，中国人秒懂 |
+| 专业 DAW（Logic/Cubase）→ 复杂、昂贵、学不会 | **打开即玩**，一个红色按钮就是全部 |
 
-## 二点五、播放与保存（本次新增）
-
-- **播放**：转谱结果可直接试听，四种音色可选（正弦/三角/方波/锯齿）
-- **逐音微调**：音符编辑页里每个音可独立 +/− 半音、+/− 时值、删除、单音试听
-- **保存**：支持导出 **WAV 音频**（16bit/44.1kHz，直接可播可发）＋ MIDI ＋ MusicXML ＋ 简谱文本
-- **对比验证**：录完先播放，听转换后的旋律是否接近原哼唱，再进音符编辑微调偏差的音
+**HumTune 补上了那个空白**：从"哼唱"到"可以带走的音乐"之间的整条路。
 
 ---
 
-## 三、v2.0 相比旧版提升
+## 🎁 你能做什么
 
-| 维度 | v1（已删除） | v2.0 |
-|------|-------------|------|
-| 打开看到 | MIDI 卷帘（要懂才懂） | 大录音键 + 波形（谁都会点） |
-| 哼完发生 | 出 MIDI，可能空白 | 自动出简谱 + 五线谱 |
-| 不懂乐理 | ❌ 拿到 MIDI 傻眼 | ✅ 简谱秒懂 + 调性自动识别 |
-| 识别准确 | YIN 单一阈值，真哼歌被判静音 | VAD 组合 + 八度消歧 + 颤音平滑 |
-| 乐谱精准 | 无量化/无调性 | BPM 量化 + 调性识别 + 音名拼写 |
-| 能带走 | 只有 MIDI | 简谱/五线谱/MIDI/MusicXML |
+1. 🎤 **哼一句** — 按下大红按钮，对着麦克风哼唱
+2. 🎼 **自动出谱** — 简谱 + 五线谱 + 可编辑 MIDI 三合一
+3. 🎹 **换乐器** — 44 种精选 + 128 种 GM 乐器，钢琴/小提琴/长笛/萨克斯… 点一下，立即听到真实乐器音色
+4. ✏️ **音格编辑** — 专业钢琴卷帘，拖拽抬音高、拉长时值，一格一格改到满意
+5. 🔍 **参照对比** — 导入 MP3/M4A/WAV，和你的旋律 A/B 比对
+6. 💾 **导出带走** — MIDI / MusicXML / 音频 / 简谱文本，一条龙
 
 ---
 
-## 四、技术栈
+## 📸 界面一览
 
-- **语言**：Swift 6.4 / SwiftUI（macOS 14+）
-- **音高检测**：YIN（经典算法）+ 中值平滑 + 八度消歧
-- **音符切分**：组合 VAD（置信度 OR 能量）
-- **量化**：BPM 自相关估计 + 可调量化强度
-- **调性**：Krumhansl-Schmuckler 24 调模板
-- **输出**：SMF MIDI / MusicXML / 简谱文本
+### 主界面（打开就有一首《小星星》示范，零门槛）
+![HumTune 主界面](docs/screenshot-main.png)
 
----
-
-## 五、二次开发
-
-```bash
-cd ~/Desktop/HumTune
-swift build              # 编译
-swift run HumTuneCli     # 跑核心引擎验证器（12 项测试）
-./make_app.sh            # 重新打包 .app
-./make_dmg.sh            # 重新打包 DMG
-```
-
-**工程结构**：
-```
-Sources/
-├── HumTuneCore/    # 核心引擎（无 UI 依赖）
-│   ├── Models.swift          # 数据模型
-│   ├── PitchEngine.swift     # YIN 音高检测
-│   ├── NoteSegmenter.swift   # 音符切分
-│   ├── Quantizer.swift       # 节奏量化
-│   ├── KeyEstimator.swift    # 调性+音名拼写
-│   ├── MIDIWriter.swift      # MIDI 写出
-│   ├── MusicXMLExporter.swift# MusicXML 导出
-│   └── Transcriber.swift     # 流水线协调 + 简谱
-├── HumTuneCli/      # 命令行验证器
-└── HumTuneApp/      # SwiftUI 界面
-```
+### 编辑工作台（换乐器 + 音格编辑 + 参照对比）
+![HumTune 编辑工作台](docs/screenshot-studio.png)
 
 ---
 
-## 六、已知待办（阶段二）
+## 🚀 快速开始
 
-- 智能编曲补全（自动配和声/鼓/贝斯）——差异化杀招
-- 五线谱真实排版渲染（当前简化版，MusicXML 交给 MuseScore 精排）
-- 音频导出（wav/m4a）
-- 谱图 PNG 导出
-- sf2 音色库导入
-- 分发需 Developer ID 证书（当前 ad-hoc 签名仅本机可跑）
+### 方式一：直接运行（最快）
+1. 下载 `HumTune-3.0.0-macOS.zip`
+2. 解压，把 `HumTune.app` 拖进「应用程序」文件夹
+3. 双击打开，开始哼唱
+
+### 方式二：安装包
+1. 下载 `HumTune-3.0.0.dmg`
+2. 打开 DMG，把 app 拖入 Applications
+3. 完成
+
+> 需要 macOS 14.0 或更高版本。首次打开若提示"无法验证开发者"，右键 → 打开 → 确认。
 
 ---
 
-## 七、知识库来源
+## 🛠 技术栈
 
-本工具基于 `~/Documents/knowledge/admin/music-production/` 音乐知识库开发（10 文件，含 6+3 专题深度学习成果）。
+- **纯 Swift / SwiftUI** 原生，零外部依赖，装机即用
+- **YIN 音高检测引擎**（亚半音精度，误差 < 30 音分）
+- **AVAudioUnitSampler + 系统 GM 音色库**（128 种真实乐器音色）
+- **自研 SMF MIDI 写入器** + MusicXML 导出
+
+---
+
+## 📄 许可证
+
+MIT License — 详见 [LICENSE](LICENSE)
+
+---
+
+*哼一句，就是创作。* 🎵
+
+---
+
+# 🎼 哼曲 HumTune — 讓所有人都參與到音樂創作中來，沒有障礙
+
+哼一句旋律，就能把它變成可以播放、可以換樂器、可以一格一格編輯、可以匯出 MIDI 的音樂作品。**不需要任何樂理知識，不需要任何樂器，只需要你的聲音。**
+
+| 別人 | HumTune |
+|------|---------|
+| 哼歌搜歌 → 只告訴你這是哪首歌 | 哼歌 → **直接出簡譜 + 五線譜 + MIDI** |
+| 音頻轉 MIDI → 出了 MIDI 卻看不懂 | 出譜**還帶易讀的簡譜** |
+| 專業 DAW → 複雜、昂貴、學不會 | **打開即玩**，一個紅色按鈕就是全部 |
+
+🎤 哼一句 → 🎼 自動出譜 → 🎹 換樂器 → ✏️ 音格編輯 → 💾 匯出 MIDI/MusicXML/音頻。
+
+**快速開始**：下載 `HumTune-3.0.0-macOS.zip` 解壓直接運行，或下載 `HumTune-3.0.0.dmg` 安裝。需 macOS 14.0+。
+
+---
+
+# 🎼 HumTune — Music Creation for Everyone, Zero Barriers
+
+Hum a melody, and HumTune turns it into playable, editable, exportable music. **No music theory. No instruments. Just your voice.**
+
+| Others | HumTune |
+|--------|---------|
+| Hum-to-search → only tells you the song name | Hum → **get Jianpu + Sheet Music + MIDI instantly** |
+| Audio-to-MIDI → unreadable output | **Readable notation** included |
+| Pro DAWs → complex, expensive | **Open and play** — one red button is all you need |
+
+🎤 Hum → 🎼 Auto-transcribe → 🎹 Switch instruments (128 GM sounds) → ✏️ Piano-roll editing → 💾 Export MIDI/MusicXML/Audio.
+
+**Quick start**: Download `HumTune-3.0.0-macOS.zip`, unzip and run — or `HumTune-3.0.0.dmg` to install. Requires macOS 14.0+.
+
+---
+
+# 🎼 HumTune — 誰でも音楽制作に参加できる、障壁ゼロ
+
+メロディーをハミングするだけで、再生も楽器切替も、一マスずつの編集も、MIDI 書き出しもできる音楽作品に変身。**楽譜の知識も楽器も不要。必要なのはあなたの声だけ。**
+
+| 他サービス | HumTune |
+|-----------|---------|
+| ハミング検索 → 曲名しか分からない | ハミング → **楽譜（数字譜・五線譜）+ MIDI を即生成** |
+| 音声→MIDI → 読めない出力 | **読みやすい楽譜付き** |
+| プロ向け DAW → 複雑で高額 | **開くだけで遊べる**、赤いボタンが全て |
+
+🎤 ハミング → 🎼 自動採譜 → 🎹 楽器切替（128 音色）→ ✏️ ピアノロール編集 → 💾 MIDI/MusicXML/音声を書き出し。
+
+**クイックスタート**：`HumTune-3.0.0-macOS.zip` を解凍してそのまま実行、または `HumTune-3.0.0.dmg` でインストール。macOS 14.0+ が必要です。
+
+---
+
+# 🎼 HumTune — 누구나 음악 창작에 참여할 수 있다, 장벽 제로
+
+멜로디를 흥얼거리기만 하면, 재생·악기 변경·한 칸씩 편집·MIDI 내보내기가 가능한 음악 작품으로 변신합니다. **악보 지식도, 악기도 필요 없습니다. 오직 당신의 목소리만 있으면 됩니다.**
+
+| 다른 서비스 | HumTune |
+|-----------|---------|
+| 허밍 검색 → 곡명만 알려줌 | 허밍 → **악보(숫자보·오선보) + MIDI 즉시 생성** |
+| 오디오→MIDI → 읽기 어려운 출력 | **읽기 쉬운 악보 포함** |
+| 전문 DAW → 복잡하고 비쌈 | **열면 바로**, 빨간 버튼이 전부 |
+
+🎤 허밍 → 🎼 자동 채보 → 🎹 악기 변경(128 음색) → ✏️ 피아노 롤 편집 → 💾 MIDI/MusicXML/오디오 내보내기.
+
+**빠른 시작**: `HumTune-3.0.0-macOS.zip`을 압축 해제해 바로 실행하거나, `HumTune-3.0.0.dmg`로 설치하세요. macOS 14.0+ 필요.

@@ -9,9 +9,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.conaeon.humtune</string>
 	<key>CFBundleVersion</key>
-	<string>2.0.0</string>
+	<string>3.0.0</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0.0</string>
+	<string>3.0.0</string>
 	<key>CFBundleExecutable</key>
 	<string>HumTuneApp</string>
 	<key>CFBundlePackageType</key>
