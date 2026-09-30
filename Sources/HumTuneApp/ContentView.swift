@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var viewMode: ViewMode = .jianpu
     @State private var waveform: SynthEngine.Waveform = .sine
     @State private var playingIndex: Int = 0
+    @State private var showStudio = false
 
     enum ViewMode: String, CaseIterable, Identifiable {
         case jianpu = "简谱"
@@ -109,6 +110,16 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
 
+                // 编辑工作台入口
+                Button {
+                    showStudio = true
+                } label: {
+                    Label("🎛 进入编辑工作台（换乐器/音格编辑/对比）", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .padding(.vertical, 4)
+
                 // 播放/导出操作栏
                 HStack(spacing: 16) {
                     Button(player.isPlaying ? "停止" : "▶ 播放") {
@@ -139,6 +150,9 @@ struct ContentView: View {
         .frame(minWidth: 520, minHeight: 640)
         .onReceive(player.$isPlaying) { playing in
             if !playing { playingIndex = 0 }
+        }
+        .sheet(isPresented: $showStudio) {
+            StudioView(notes: $notes, bpm: bpm, key: key)
         }
     }
 
